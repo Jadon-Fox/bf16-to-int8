@@ -53,7 +53,6 @@ def convert(
         "rmse_vs_nf4_dequant": rmse(f32, recon),
         "max_abs_err_vs_nf4_dequant": max_abs_err(f32, recon),
         "note": "requant of NF4 dequant. not a claim. not ORCH_BASE_PACK.",
-        "": False,
     }
     return {"q8": q8, "scales": scales, "f32": f32, "recon": recon, "meta": meta}
 def demo_weights(n: int = 256) -> list[float]:
@@ -96,7 +95,7 @@ def run_tensor(args: argparse.Namespace) -> int:
             f"max|e|={m['max_abs_err_vs_nf4_dequant']:.6g}"
         )
         print(f"wrote {args.out_prefix}.i8.bin {args.out_prefix}.scale.f32.bin {args.out_prefix}.meta.json")
-        print("requant only. =false")
+        print("requant only.")
     return 0
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)

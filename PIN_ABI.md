@@ -30,8 +30,7 @@ Per linear:
   "n_nf4_modules": 122,
   "n_passthrough": 72,
   "int8_blocksize": 64,
-  "int8_scheme": "symmetric_per_block_zp0",
-  "": false
+  "int8_scheme": "symmetric_per_block_zp0"
 }
 ```
 Loader requires `schema=bf16_to_int8_pin_v1` (or legacy `nf4_to_int8_pin_v1`). Extra keys are informational:
@@ -45,8 +44,7 @@ Loader requires `schema=bf16_to_int8_pin_v1` (or legacy `nf4_to_int8_pin_v1`). E
   "src_kinds": ["nf4", "bf16"],
   "policy": {"linears": "int8", "dense": "int8", "embed": "copy", "norm": "copy"},
   "int8_blocksize": 64,
-  "int8_scheme": "symmetric_per_block_zp0",
-  "": false
+  "int8_scheme": "symmetric_per_block_zp0"
 }
 ```
 `src_quant` in each `int8_state` may be `nf4`, `fp4`, `bf16`, `f16`, or `f32`. Dequant formula is the same.
@@ -64,8 +62,7 @@ Loader requires `schema=bf16_to_int8_pin_v1` (or legacy `nf4_to_int8_pin_v1`). E
   "blocksize": 64,
   "shape": [out, in],
   "src_quant": "nf4",
-  "double_quant": "double",
-  "": false
+  "double_quant": "double"
 }
 ```
 `double_quant` is `"double"` or `"single"` (source NF4). Loader does **not** re-decode NF4.

@@ -25,6 +25,18 @@ from dtype_io import pack_bf16, unpack_bf16
 from pin_convert import Policy, convert_pin
 from safetensors_io import SafeTensorsFile, write_safetensors
 ROOT = Path(__file__).resolve().parent
+
+def assert_no_empty_key(obj, where="root"):
+    """Sep 11 sweep damage guard (issue #10): emitted artifacts must not carry "" keys."""
+    if isinstance(obj, dict):
+        assert "" not in obj, f"empty key at {where}"
+        for k, v in obj.items():
+            assert_no_empty_key(v, f"{where}.{k}")
+    elif isinstance(obj, list):
+        for i, v in enumerate(obj):
+            assert_no_empty_key(v, f"{where}[{i}]")
+
+
 def test_codebook_ends():
     assert NF4_CODEBOOK[0] == -1.0
     assert NF4_CODEBOOK[7] == 0.0
@@ -51,6 +63,7 @@ def test_convert_rmse_small():
     w = demo_weights(256)
     qw, am = quantize_nf4(w, blocksize=64)
     got = convert(bytes(qw), am, 256, 64, NIBBLE_LO_THEN_HI, 64)
+    assert_no_empty_key(got["meta"], "meta")
     assert got["meta"]["rmse_vs_nf4_dequant"] < 0.02
     assert got["meta"]["max_abs_err_vs_nf4_dequant"] < 0.05
     assert rmse(got["f32"], got["recon"]) == got["meta"]["rmse_vs_nf4_dequant"]
@@ -118,6 +131,7 @@ def test_pin_single_quant_roundtrip():
         assert pin["rmse_mean"] < 0.02
         assert (dst / "model.safetensors").is_file()
         assert (dst / "pin.json").is_file()
+        assert_no_empty_key(json.loads((dst / "pin.json").read_text()), "pin.json")
         with SafeTensorsFile(str(dst / "model.safetensors")) as st:
             assert st.tensors["model.layers.0.mlp.down_proj.weight"].dtype == "I8"
             assert st.tensors["model.layers.0.mlp.down_proj.weight"].shape == (8, 64)
@@ -125,6 +139,7 @@ def test_pin_single_quant_roundtrip():
             assert st.tensors["model.norm.weight"].dtype == "BF16"
             assert "model.layers.0.mlp.down_proj.weight.absmax" not in st.tensors
         cfg = json.loads((dst / "config.json").read_text())
+        assert_no_empty_key(cfg, "config.json")
         assert cfg["quantization_config"]["quant_method"] == "bf16_to_int8_pin"
 def test_cli_pin_dry_run():
     out_f, in_f = 8, 64
@@ -149,6 +164,7 @@ def test_cli_pin_dry_run():
             text=True,
         )
         plan = json.loads(r.stdout)
+        assert_no_empty_key(plan, "dry_run_plan")
         assert plan["n_nf4_modules"] == 1
         assert "lin" in plan["nf4_modules"]
 def test_fixture_cli():
@@ -160,6 +176,7 @@ def test_fixture_cli():
             text=True,
         )
         pin = json.loads(r.stdout)
+        assert_no_empty_key(pin, "fixture_pin")
         assert pin["schema"] == "bf16_to_int8_pin_v1"
         assert (Path(td) / "int8_pin" / "model.safetensors").is_file()
         assert (Path(td) / "int8_pin" / "pin.json").is_file()

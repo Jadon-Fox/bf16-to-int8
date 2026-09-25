@@ -1,5 +1,5 @@
 /* BF16/F32 → symmetric INT8 per block (B=64, zp=0, scale=amax/127).
- * Offline pin convert. Not train. =false. */
+ * Offline pin convert. Not train. */
 #include <cuda_runtime.h>
 #include <stdint.h>
 #include <math.h>

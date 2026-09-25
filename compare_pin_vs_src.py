@@ -5,7 +5,7 @@ Two residuals, kept separate:
    mismatches. Zero means the pin bytes are the converter output.
 2. Scheme fuzz: dequant (i8 * per-block scale) vs original BF16. Bound is
    half the block scale (round-to-nearest, zp=0, clip ±127).
-Carve-out. Not orch train. =false.
+Carve-out. Not orch train.
 """
 from __future__ import annotations
 import argparse
@@ -192,8 +192,6 @@ def main() -> int:
         "worst_max_abs": worst,
         "worst_rmse": worst_rmse,
         "seconds": time.time() - t0,
-        "": False,
-        "": False,
         "note": (
             "pin.json rmse_mean=0.0 was skipped large-tensor RMSE, not lossless. "
             "This report is dequant vs original BF16 plus re-quant byte match."
@@ -207,7 +205,7 @@ def main() -> int:
         f"scheme_within_half_lsb={str(scheme_within_half).lower()} "
         f"rmse={rmse:.8g} max_abs={global_max:.8g} n_over={global_over} "
         f"i8_mis={global_i8_mis} pass_mis={n_pass_mis} "
-        f"n_lin={n_linears} n_elem={total_n} out={out} =false",
+        f"n_lin={n_linears} n_elem={total_n} out={out}",
         flush=True,
     )
     return 0 if transfer_exact and scheme_within_half else 3
