@@ -1,0 +1,30 @@
+# Required-check candidate: pytest smoke. Advisory: CodeQL only — do not require as merge gate.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest-smoke:
+    name: pytest smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pytest
+        run: pip install pytest
+      - name: Run unit tests (no GPU build required)
+        run: python -m pytest -q test_nf4_to_int8.py
