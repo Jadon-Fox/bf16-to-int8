@@ -1,0 +1,27 @@
+name: project-autoadd
+on:
+  issues:
+    types: [opened, transferred, reopened]
+  pull_request:
+    types: [opened, reopened]
+
+jobs:
+  add-to-projects:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: read
+      pull-requests: read
+    steps:
+      - name: Add to Personal Project 4 (Jadon-Fox)
+        uses: actions/add-to-project@v1.0.2
+        with:
+          project-url: https://github.com/users/Jadon-Fox/projects/4
+          github-token: ${{ secrets.PROJECT_TOKEN }}
+        continue-on-error: true
+
+      - name: Add to Org Project 4 (Fractal-Deployment)
+        uses: actions/add-to-project@v1.0.2
+        with:
+          project-url: https://github.com/orgs/Fractal-Deployment/projects/4
+          github-token: ${{ secrets.PROJECT_TOKEN }}
+        continue-on-error: true
