@@ -3,3 +3,4 @@ cuda/*.o
 __pycache__/
 *.pyc
 out/
+mojo/*.so
