@@ -4,7 +4,7 @@ plus the residual (BF16 - dequant) kept as a second plane:
   - sparse outliers, and/or
   - low-rank UV
 The theory puts that plane in *host RAM* and pipelines it like L3.
-This file only measures reconstruction. =false.
+This file only measures reconstruction.
 """
 from __future__ import annotations
 import math
@@ -124,7 +124,7 @@ def compare(w: Sequence[float], rows: int, cols: int, blocksize: int = 64) -> di
         "rmse_int4_rank4": rmse(w, h4_lr),
         "rmse_int4_rank4_sparse2": rmse(w, h4_lr_sp),
         "int4_pad_int8_lossless": pad_int4_to_int8(q4) == list(q4),
-        "note": "reconstruction vs original f32. not PPL. =false",
+        "note": "reconstruction vs original f32. not PPL.",
     }
 if __name__ == "__main__":
     from nf4_to_int8 import demo_weights

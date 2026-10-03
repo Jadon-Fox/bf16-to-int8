@@ -2,7 +2,7 @@
 Default hop: dense BF16/F16/F32 → INT8 (schema bf16_to_int8_pin_v1).
 NF4/FP4 sources are a lossy second hop (HARD_BLOCK unless --allow-requant).
 Dest ABI: bf16_to_int8_pin_v1 (legacy string nf4_to_int8_pin_v1 still loads).
-One-time. Not dest-pack. Not orch hot path. =false.
+One-time. Not dest-pack. Not orch hot path.
 """
 from __future__ import annotations
 import json
@@ -297,7 +297,7 @@ def convert_dense_module(
             used_gpu = True
             global _GPU_QUANT_LOGGED
             if not _GPU_QUANT_LOGGED:
-                print("INT8_QUANT device=cuda block=64 =false", file=sys.stderr)
+                print("INT8_QUANT device=cuda block=64", file=sys.stderr)
                 _GPU_QUANT_LOGGED = True
     if not used_gpu:
         f32 = unpack_dense(info.dtype, raw, info.shape)
@@ -348,7 +348,6 @@ def _append_int8(
         "shape": list(shape),
         "src_quant": meta["src_quant"],
         "double_quant": meta["double_quant"],
-        "": False,
     }
     raw_state = json.dumps(state, separators=(",", ":")).encode("utf-8")
     out_tensors.append((stem + ".weight.int8_state", "U8", (len(raw_state),), raw_state))
@@ -400,7 +399,6 @@ def _append_nf4(
         "nested_dtype": "float32",
         "nested_offset": 0.0,
         "src_quant": meta["src_quant"],
-        "": False,
     }
     raw_state = json.dumps(state, separators=(",", ":")).encode("utf-8")
     out_tensors.append(
@@ -453,7 +451,6 @@ def _append_nested(
         "shape": list(shape),
         "src_quant": meta["src_quant"],
         "plug": "4bit_subquantile_in_nf4_cell",
-        "": False,
     }
     raw_state = json.dumps(state, separators=(",", ":")).encode("utf-8")
     out_tensors.append((stem + ".weight.nested_state", "U8", (len(raw_state),), raw_state))
@@ -521,8 +518,6 @@ def convert_pin(
                 "norm": "copy",
             },
             "blocksize": int8_blocksize,
-            "": False,
-            "": False,
             "note": "one hop from BF16/F16/F32. not dest-pack. not orch hot path.",
         }
         if dry_run:
@@ -613,7 +608,6 @@ def convert_pin(
             "format": "pt",
             "quantization": qtag,
             "converted_from": ",".join(sorted(src_kinds)) or "bf16",
-            "": "false",
         },
     )
     rmses = [m.get("rmse_vs_src_dequant", m.get("rmse_vs_nf4_dequant", 0.0)) for m in reports]
@@ -638,8 +632,6 @@ def convert_pin(
         "int8_scheme": "symmetric_per_block_zp0" if dest == "int8" else None,
         "rmse_mean": (sum(rmses) / len(rmses)) if rmses else 0.0,
         "max_abs_err_max": max(maxes) if maxes else 0.0,
-        "": False,
-        "": False,
         "note": "one hop from dense BF16/F16/F32. Ampere train still GEMMs in f16/f32.",
     }
     (out_dir / "pin.json").write_text(json.dumps(pin, indent=2) + "\n")
@@ -659,7 +651,6 @@ def convert_pin(
             "int8_scheme": "symmetric_per_block_zp0",
             "int8_blocksize": int8_blocksize,
             "converted_from": sorted(src_kinds),
-            "": False,
         }
         (out_dir / "config.json").write_text(json.dumps(cfg, indent=2) + "\n")
     for name in COPY_SIDE_FILES:

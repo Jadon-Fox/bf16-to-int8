@@ -2,7 +2,7 @@
  * Hole = NF4 nibble (existing qpack). Plug = 4-bit sub-index in that cell.
  * W = NF8_CELLS[hole][plug] * absmax[i/blocksize]
  * L0: expand to f32 at load. L1: H-TILE lookup instead of codebook[nibble].
- * =false. Generated cells: python3 nested_nf.py --header include/nf8_cells.h
+ * Generated cells: python3 nested_nf.py --header include/nf8_cells.h
  */
 #ifndef ORCH_NESTED_NF8_H_
 #define ORCH_NESTED_NF8_H_
