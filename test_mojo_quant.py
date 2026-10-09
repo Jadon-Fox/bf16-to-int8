@@ -99,3 +99,12 @@ def test_mojo_cpu_rejects_bad_args():
     assert mojo_quant.quant_f32_i8(b"", device="cpu") is None
     assert mojo_quant.quant_f32_i8(pack_f32([1.0]), blocksize=32, device="cpu") is None
     assert mojo_quant.quant_bf16_i8(b"\x00\x00\x00", device="cpu") is None
+    assert mojo_quant.quant_f32_i8(pack_f32([1.0]), device="cuda") is None
+
+
+def test_mojo_gpu_without_device_returns_none_or_quantizes():
+    # rc 6 (no device) maps to None; on a GPU host it must match the CPU path.
+    raw = pack_f32(_weights(4096 + 17, seed=7))
+    got = mojo_quant.quant_f32_i8(raw, device="gpu")
+    if got is not None:
+        assert got == mojo_quant.quant_f32_i8(raw, device="cpu")

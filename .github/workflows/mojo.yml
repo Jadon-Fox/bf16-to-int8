@@ -1,0 +1,48 @@
+# Advisory, not a required check: builds the Mojo INT8 twin (cross-compiled for
+# sm_86, no GPU needed) and runs its CPU golden test. Catches Mojo API drift.
+name: Mojo
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "mojo/**"
+      - "mojo_quant.py"
+      - "test_mojo_quant.py"
+      - "nf4.py"
+      - "dtype_io.py"
+      - ".github/workflows/mojo.yml"
+  push:
+    branches: [main]
+    paths:
+      - "mojo/**"
+      - "mojo_quant.py"
+      - "test_mojo_quant.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mojo-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mojo-cpu-golden:
+    name: mojo build + CPU golden
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Mojo 1.1 / MAX 26.6 and pytest
+        run: pip install "mojo==1.1.*" "max==26.6.*" pytest
+      - name: Build quant_i8_mojo.so (sm_86 cross-compile)
+        run: bash mojo/build.sh
+      - name: CPU golden test
+        run: |
+          python -c "import mojo_quant, sys; sys.exit(0 if mojo_quant.mojo_quant_available() else 1)"
+          python -m pytest -q -rs test_mojo_quant.py

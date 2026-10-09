@@ -100,15 +100,15 @@ def k_quant[
             w = bf16_to_f32(UInt16(inp[unsafe_offset=i]))
         else:
             w = Float32(inp[unsafe_offset=i])
-    sh[t] = abs(w)
+    sh[unsafe_offset=t] = abs(w)
     barrier()
     var off = BLOCK // 2
     while off > 0:
         if t < off:
-            sh[t] = max(sh[t], sh[t + off])
+            sh[unsafe_offset=t] = max(sh[unsafe_offset=t], sh[unsafe_offset=t + off])
         barrier()
         off //= 2
-    var s = scale_of(sh[0])
+    var s = scale_of(sh[unsafe_offset=0])
     if t == 0:
         sc[unsafe_offset=blk] = s
     if in_range:

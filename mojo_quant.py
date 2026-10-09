@@ -37,6 +37,8 @@ def mojo_quant_available() -> bool:
 def _quant(raw: bytes, elem_size: int, fn_name: str, blocksize: int) -> Optional[Tuple[bytes, List[float]]]:
     if blocksize != 64 or not mojo_quant_available() or _MOD is None:
         return None
+    if not hasattr(_MOD, fn_name):  # device other than cpu | gpu
+        return None
     n = len(raw) // elem_size
     if n < 1 or len(raw) != n * elem_size:
         return None
