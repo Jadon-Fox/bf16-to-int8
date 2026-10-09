@@ -75,7 +75,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--golden-n", type=int, default=1 << 16, help="prefix checked vs nf4 golden")
     ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args(argv)
-    n = a.n - (a.n % B) if a.n > B else a.n
+    n = a.n
     raw = make_bf16(n, a.seed)
 
     paths: Dict[str, Callable[[], QuantOut]] = {}
