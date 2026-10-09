@@ -2,7 +2,7 @@
 """Twin check: Mojo INT8 quantizer (mojo/quant_i8_mojo.so) vs CUDA (cuda/libquant_i8.so).
 
 Same BF16 input through every available path: cuda, mojo-gpu, mojo-cpu. Per path:
-max abs dequant error vs the BF16 source, its bound (half a block scale), codes and
+max abs dequant error vs the BF16 source, elements over half their own block scale, codes and
 scales that differ from the CUDA path, codes that differ from the Python golden on
 a prefix, and median wall time per call (H2D + kernel + D2H, end to end).
 
@@ -39,13 +39,23 @@ def make_bf16(n: int, seed: int) -> bytes:
     return bytes(out)
 
 
-def max_err(raw: bytes, q: bytes, sc: List[float]) -> Tuple[float, float]:
-    """(max |w - q*s|, max allowed = 0.5 * max scale). GPU reduce when CUDA is built."""
+def max_err(raw: bytes, q: bytes, sc: List[float]) -> Tuple[float, int]:
+    """(max |w - q*s|, elements over half their own block's scale).
+
+    GPU reduce when CUDA is built; the CPU fallback uses the same per-block
+    slack as k_err_bf16 in cuda/quant_i8.cu.
+    """
     r = gpu_quant.compare_bf16_i8(raw, q, sc, B)
     if r is not None:
-        return r["max_abs"], 0.5 * max(sc)
+        return r["max_abs"], r["n_over_half_scale"]
     vals = unpack_bf16(raw)
-    return max_abs_err(vals, dequant_int8(q, sc, B)), 0.5 * max(sc)
+    rec = dequant_int8(q, sc, B)
+    over = 0
+    for i, (w, d) in enumerate(zip(vals, rec)):
+        half = 0.5 * sc[i // B]
+        if abs(w - d) > half * 1.0000002 + 1e-6:
+            over += 1
+    return max_abs_err(vals, rec), over
 
 
 def timed(fn: Callable[[], QuantOut], reps: int) -> Tuple[QuantOut, float]:
@@ -79,7 +89,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     gn = min(a.golden_n, n)
-    gq, gsc = quantize_int8_symmetric(unpack_bf16(raw[: 2 * gn]), B)
+    # Quantize whole blocks so a gn that is not a multiple of B sees the same
+    # last-block scale as the kernels; compare codes on the first gn only.
+    gend = min(n, -(-gn // B) * B)
+    gq, gsc = quantize_int8_symmetric(unpack_bf16(raw[: 2 * gend]), B)
+    gq = gq[:gn]
     ref: Optional[Tuple[bytes, List[float]]] = None
     report: Dict[str, Any] = {"n": n, "blocksize": B, "reps": a.reps, "golden_n": gn, "paths": {}}
     for name, fn in paths.items():
@@ -88,12 +102,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             report["paths"][name] = {"ok": False}
             continue
         q, sc = out
-        err, bound = max_err(raw, q, sc)
+        err, n_over = max_err(raw, q, sc)
         row: Dict[str, Any] = {
             "ok": True,
             "max_abs_err": err,
-            "half_scale_bound": bound,
-            "within_bound": err <= bound * (1 + 1e-6),
+            "n_over_half_scale": n_over,
+            "within_bound": n_over == 0,
             "golden_code_mismatch": sum(1 for x, y in zip(q[:gn], gq) if x != y),
             "golden_scale_rel_max": max(abs(s - g) / g for s, g in zip(sc, gsc)),
             "median_s": sec,
@@ -108,7 +122,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         report["paths"][name] = row
     print(json.dumps(report, indent=2))
     bad = [k for k, v in report["paths"].items()
-           if not v["ok"] or not v["within_bound"] or v.get("code_mismatch_vs_ref", 0)]
+           if not v["ok"] or not v["within_bound"]
+           or v.get("code_mismatch_vs_ref", 0) or v.get("scale_mismatch_vs_ref", 0)]
     return 1 if bad else 0
 
 
