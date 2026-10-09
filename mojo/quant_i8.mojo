@@ -115,10 +115,11 @@ def k_quant[
         q[unsafe_offset=i] = quant_one(w, s)
 
 
-def quant_gpu[bf16: Bool](in_addr: Int, n: Int, q_addr: Int, s_addr: Int) raises:
+def quant_gpu[
+    bf16: Bool
+](ctx: DeviceContext, in_addr: Int, n: Int, q_addr: Int, s_addr: Int) raises:
     comptime elem = DType.uint16 if bf16 else DType.float32
     var nblk = ceildiv(n, BLOCK)
-    var ctx = DeviceContext()
     var h_in = Pointer[Scalar[elem], MutAnyOrigin](unsafe_from_address=in_addr)
     var h_q = Pointer[Int8, MutAnyOrigin](unsafe_from_address=q_addr)
     var h_s = Pointer[Float32, MutAnyOrigin](unsafe_from_address=s_addr)
@@ -168,16 +169,29 @@ def quant_f32_i8_cpu(
     return PythonObject(0)
 
 
+def _run_gpu[bf16: Bool](a: Tuple[Int, Int, Int, Int]) -> PythonObject:
+    # has_accelerator() is answered at compile time (--target-accelerator), so
+    # probe the device at run time: no driver/GPU -> 6, as quant_i8.cu callers expect.
+    if not has_accelerator():
+        return PythonObject(6)
+    try:
+        var ctx = DeviceContext()
+        try:
+            quant_gpu[bf16](ctx, a[0], a[1], a[2], a[3])
+        except:
+            return PythonObject(5)
+    except:
+        return PythonObject(6)
+    return PythonObject(0)
+
+
 def quant_bf16_i8_gpu(
     in_addr: PythonObject, n: PythonObject, q_addr: PythonObject, s_addr: PythonObject
 ) raises -> PythonObject:
     var a = _args(in_addr, n, q_addr, s_addr)
     if a[1] < 1:
         return PythonObject(2)
-    if not has_accelerator():
-        return PythonObject(6)
-    quant_gpu[True](a[0], a[1], a[2], a[3])
-    return PythonObject(0)
+    return _run_gpu[True](a)
 
 
 def quant_f32_i8_gpu(
@@ -186,10 +200,7 @@ def quant_f32_i8_gpu(
     var a = _args(in_addr, n, q_addr, s_addr)
     if a[1] < 1:
         return PythonObject(2)
-    if not has_accelerator():
-        return PythonObject(6)
-    quant_gpu[False](a[0], a[1], a[2], a[3])
-    return PythonObject(0)
+    return _run_gpu[False](a)
 
 
 @export
