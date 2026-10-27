@@ -105,7 +105,7 @@ def write_safetensors(
         start = cursor
         end = start + len(blob)
         planned.append((name, dtype, shape, blob, start, end))
-        cursor = _align8(end)
+        cursor = end
     header: dict = {}
     if metadata:
         header["__metadata__"] = {str(k): str(v) for k, v in metadata.items()}

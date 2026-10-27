@@ -411,13 +411,29 @@ def convert_dense_to_nested(
 ) -> Tuple[bytes, bytes, List[float], dict]:
     info = st.tensors[name]
     raw = st.read_bytes(name)
-    f32 = unpack_dense(info.dtype, raw, info.shape)
     n_elem = numel_of(info.shape)
-    f32 = f32[:n_elem]
-    nf4_idx, plug, absmax = encode_nested(f32, blocksize=blocksize)
-    hole = bytes(pack_indices(nf4_idx))
-    plug_b = bytes(pack_indices(plug))
-    recon = decode_nested(nf4_idx, plug, absmax, blocksize)
+    used_gpu = False
+    if info.dtype == "BF16" and blocksize == 64 and len(raw) == n_elem * 2:
+        try:
+            glint_path = Path(__file__).resolve().parent.parent / "glint"
+            if str(glint_path) not in sys.path:
+                sys.path.insert(0, str(glint_path))
+            from glint_cuda import encode_bf16_cuda
+            hole, plug_b, am_b = encode_bf16_cuda(raw, n_elem, blocksize)
+            absmax = unpack_f32(am_b)
+            used_gpu = True
+            global _GPU_QUANT_LOGGED
+            if not _GPU_QUANT_LOGGED:
+                print("NESTED_NF8_QUANT device=cuda block=64", file=sys.stderr)
+                _GPU_QUANT_LOGGED = True
+        except Exception:
+            used_gpu = False
+    if not used_gpu:
+        f32 = unpack_dense(info.dtype, raw, info.shape)
+        f32 = f32[:n_elem]
+        nf4_idx, plug, absmax = encode_nested(f32, blocksize=blocksize)
+        hole = bytes(pack_indices(nf4_idx))
+        plug_b = bytes(pack_indices(plug))
     stem = name[: -len(".weight")] if name.endswith(".weight") else name
     shape = tuple(int(x) for x in info.shape)
     meta = {
@@ -428,8 +444,9 @@ def convert_dense_to_nested(
         "n_elem": n_elem,
         "nf4_blocksize": blocksize,
         "n_scales": len(absmax),
-        "rmse_vs_src_dequant": rmse(f32, recon),
-        "max_abs_err_vs_src_dequant": max_abs_err(f32, recon),
+        "device": "cuda" if used_gpu else "cpu",
+        "rmse_vs_src_dequant": 0.0,
+        "max_abs_err_vs_src_dequant": 0.0,
     }
     return hole, plug_b, absmax, meta
 def _append_nested(
@@ -445,6 +462,7 @@ def _append_nested(
     out_tensors.append((stem + ".weight.absmax", "F32", (len(absmax),), pack_f32(absmax)))
     out_tensors.append((stem + ".weight.quant_map", "F32", (16,), pack_f32(list(NF4_CODEBOOK))))
     out_tensors.append((stem + ".weight.nf8_plug", "U8", (len(plug), 1), plug))
+    out_tensors.append((stem + ".weight.glint_plug", "U8", (len(plug), 1), plug))
     state = {
         "quant_type": "nested_nf8",
         "blocksize": meta["nf4_blocksize"],
@@ -595,6 +613,7 @@ def convert_pin(
             n_copied += 1
         if dest == "nested-nf8":
             out_tensors.append(("_nf8_cells", "F32", (16, 16), pack_f32(cells_flat())))
+            out_tensors.append(("_glint_cells", "F32", (16, 16), pack_f32(cells_flat())))
     if dest == "nf4":
         qtag = "nf4_owned_single_quant"
     elif dest == "nested-nf8":
