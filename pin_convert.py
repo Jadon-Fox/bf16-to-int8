@@ -27,6 +27,7 @@ from nf4 import (
     rmse,
     unpack_f32,
     pack_indices,
+    unpack_indices,
 )
 from nested_nf import NF8_CELLS, cells_flat, decode_nested, encode_nested
 from safetensors_io import SafeTensorsFile, SafeTensorsSet, write_safetensors
@@ -434,6 +435,13 @@ def convert_dense_to_nested(
         nf4_idx, plug, absmax = encode_nested(f32, blocksize=blocksize)
         hole = bytes(pack_indices(nf4_idx))
         plug_b = bytes(pack_indices(plug))
+    else:
+        f32 = unpack_dense(info.dtype, raw, info.shape)[:n_elem]
+        nf4_idx = unpack_indices(hole, n_elem)
+        plug = unpack_indices(plug_b, n_elem)
+    recon = decode_nested(nf4_idx, plug, absmax, blocksize=blocksize)
+    rmse_val = rmse(f32, recon)
+    max_err_val = max_abs_err(f32, recon)
     stem = name[: -len(".weight")] if name.endswith(".weight") else name
     shape = tuple(int(x) for x in info.shape)
     meta = {
@@ -445,8 +453,8 @@ def convert_dense_to_nested(
         "nf4_blocksize": blocksize,
         "n_scales": len(absmax),
         "device": "cuda" if used_gpu else "cpu",
-        "rmse_vs_src_dequant": 0.0,
-        "max_abs_err_vs_src_dequant": 0.0,
+        "rmse_vs_src_dequant": rmse_val,
+        "max_abs_err_vs_src_dequant": max_err_val,
     }
     return hole, plug_b, absmax, meta
 def _append_nested(
@@ -462,7 +470,6 @@ def _append_nested(
     out_tensors.append((stem + ".weight.absmax", "F32", (len(absmax),), pack_f32(absmax)))
     out_tensors.append((stem + ".weight.quant_map", "F32", (16,), pack_f32(list(NF4_CODEBOOK))))
     out_tensors.append((stem + ".weight.nf8_plug", "U8", (len(plug), 1), plug))
-    out_tensors.append((stem + ".weight.glint_plug", "U8", (len(plug), 1), plug))
     state = {
         "quant_type": "nested_nf8",
         "blocksize": meta["nf4_blocksize"],
