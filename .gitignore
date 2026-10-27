@@ -4,3 +4,8 @@ __pycache__/
 *.pyc
 out/
 mojo/*.so
+
+# Dependency and cache dirs (cleanup audit 2026-10-27)
+.venv/
+venv/
+.pytest_cache/
