@@ -26,5 +26,9 @@ jobs:
           python-version: "3.12"
       - name: Install pytest
         run: pip install pytest
-      - name: Run unit tests (no GPU build required)
-        run: python -m pytest -q test_nf4_to_int8.py
+      - name: Unit tests, stdlib only (no GPU build required)
+        run: python -m pytest -q test_nf4_to_int8.py test_fast_parity.py test_pin_load.py
+      - name: Install numpy + safetensors
+        run: pip install numpy safetensors
+      - name: Unit tests, numpy fast path + HF safetensors read-back
+        run: python -m pytest -q test_nf4_to_int8.py test_fast_parity.py test_pin_load.py

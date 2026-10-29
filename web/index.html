@@ -36,7 +36,7 @@
   <main>
     <h1>BF16 → INT8 pin</h1>
     <p class="lede">Download the dense checkpoint. Convert once. Default dest is INT8. Use NF4 only when you need to fit. GGUF / GPTQ / Unsloth-4bit are not sources.</p>
-    <p class="warn">Already-quantized NF4 is refused unless --allow-requant. Ampere still GEMMs in f16/f32. stays false.</p>
+    <p class="warn">Already-quantized NF4 is refused unless --allow-requant. Ampere still GEMMs in f16/f32.</p>
     <div class="card" style="margin-bottom:14px">
       <h2>Command</h2>
       <pre>python3 bf16_to_int8.py pin \

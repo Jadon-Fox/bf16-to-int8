@@ -164,7 +164,7 @@ def compare(w: Sequence[float], blocksize: int = 64) -> dict:
         "rmse_uniform_int8": rmse(w, h8),
         "rmse_nested_nf8": rmse(w, hnest),
         "plug_is_4bit": all(0 <= p < 16 for p in plug),
-        "note": "nested NF8 = split each of 16 Gaussian cells into 16. not IEEE LSBs. not ",
+        "note": "nested NF8 = split each of 16 Gaussian cells into 16. not IEEE LSBs.",
     }
 def cells_flat() -> List[float]:
     out: List[float] = []

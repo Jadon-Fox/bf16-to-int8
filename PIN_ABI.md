@@ -23,6 +23,9 @@ Per linear:
   config.json # quantization_config.quant_method = bf16_to_int8_pin
   tokenizer* / generation_* # copied if present
 ```
+`model.safetensors` is spec-conformant: data offsets are contiguous with no gaps (wide dtypes first, so F32 stays 4-aligned). Pins written before this rule had 8-byte gaps; the repo's own reader still opens them, HF `safetensors` does not. Re-convert.
+`config.json` `quantization_config.quant_method` follows the dest: `bf16_to_int8_pin`, `bf16_to_nf4_pin`, or `nested_nf8_pin`, plus `schema` (same string as `pin.json`).
+Reference reader: `pin_load.py` (`python3 bf16_to_int8.py verify --pin DIR`). What it refuses, the orch loader should refuse.
 `pin.json` (required):
 ```json
 {
