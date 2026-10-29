@@ -119,6 +119,27 @@ def test_verify_refuses_bad_pins():
         rep = verify_pin(out)
         assert not rep["ok"] and any("non-positive" in e for e in rep["errors"])
 
+        # truncated copy: header intact, last data bytes gone
+        convert_pin(src, out, policy=Policy(dest="int8"))
+        mf = out / "model.safetensors"
+        full = mf.read_bytes()
+        mf.write_bytes(full[:-5])
+        rep = verify_pin(out)
+        assert not rep["ok"] and any("truncated" in e for e in rep["errors"]), rep["errors"]
+        assert not verify_pin(out, expand=True)["ok"]
+
+        # trailing padding past the last offset
+        mf.write_bytes(full + b"\x00" * 3)
+        rep = verify_pin(out)
+        assert not rep["ok"] and any("offsets end at" in e for e in rep["errors"]), rep["errors"]
+
+        # garbage header is a PinError report, not a traceback
+        mf.write_bytes(b"\x05\x00\x00\x00\x00\x00\x00\x00{nope")
+        rep = verify_pin(out)
+        assert not rep["ok"] and "unreadable safetensors header" in rep["errors"][0]
+        mf.write_bytes(b"\x01\x02")
+        assert not verify_pin(out)["ok"]
+
         # missing model file
         (out / "model.safetensors").unlink()
         assert not verify_pin(out)["ok"]

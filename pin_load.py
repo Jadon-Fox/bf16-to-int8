@@ -4,6 +4,8 @@ See PIN_ABI.md. Not orch hot path. Not train.
 """
 from __future__ import annotations
 import json
+import os
+import struct
 from pathlib import Path
 from typing import Any, Dict, List
 import fast
@@ -62,7 +64,10 @@ class Pin:
         self.schema = str(self.meta.get("schema") or "")
         if self.schema not in KNOWN_SCHEMAS:
             raise PinError(f"pin.json schema={self.schema!r} not one of {list(KNOWN_SCHEMAS)}")
-        self.st = SafeTensorsFile(str(mf))
+        try:
+            self.st = SafeTensorsFile(str(mf))
+        except (OSError, ValueError, KeyError, TypeError, IndexError, struct.error) as e:
+            raise PinError(f"{mf}: unreadable safetensors header ({type(e).__name__}: {e})") from e
         if self.schema in INT8_SCHEMAS:
             self.kind, aux, tag = "int8", INT8_AUX, ".weight.int8_state"
         elif self.schema == NF4_SCHEMA:
@@ -157,8 +162,25 @@ class Pin:
                     errs.append(f"{stem}.weight.nf8_plug: {pl.dtype} {pl.nbytes}B want U8 {half}B")
         return errs
 
+    def check_layout(self) -> List[str]:
+        """Data offsets must tile the data section exactly: start at 0, no gaps or
+        overlaps, end at the file's last byte (what HF safetensors enforces)."""
+        data_len = os.path.getsize(self.st.path) - self.st.data_start
+        pos = 0
+        for info in sorted(self.st.tensors.values(), key=lambda i: i.data_offsets):
+            a, b = info.data_offsets
+            if a != pos or b < a:
+                return [f"{info.name}: data_offsets [{a}, {b}] do not follow previous end {pos}"]
+            pos = b
+        if pos != data_len:
+            return [f"model.safetensors: data section is {data_len}B but offsets end at {pos}B"
+                    + (" (truncated?)" if data_len < pos else "")]
+        return []
+
     def check(self) -> List[str]:
-        errs: List[str] = []
+        errs: List[str] = self.check_layout()
+        if errs:
+            return errs
         for name, info in self.st.tensors.items():
             if info.dtype not in DTYPE_WIDTH:
                 errs.append(f"{name}: unknown dtype {info.dtype}")
