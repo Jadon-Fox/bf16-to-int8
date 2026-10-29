@@ -89,30 +89,39 @@ class SafeTensorsSet:
         return self
     def __exit__(self, *exc) -> None:
         self.close()
-def _align8(n: int) -> int:
-    return (n + 7) & ~7
 def write_safetensors(
     path: str,
     tensors: Iterable[Tuple[str, str, Tuple[int, ...], bytes]],
     metadata: Optional[Mapping[str, str]] = None,
 ) -> None:
-    """Write tensors as (name, dtype, shape, raw_bytes). 8-byte aligned."""
-    planned: List[Tuple[str, str, Tuple[int, ...], bytes, int, int]] = []
-    cursor = 0
-    for name, dtype, shape, blob in tensors:
+    """Write tensors as (name, dtype, shape, raw_bytes).
+    Spec: data offsets are contiguous, no holes (HF safetensors rejects gaps).
+    Wide dtypes go first so every tensor stays aligned to its element width.
+    """
+    items = list(tensors)
+    for name, dtype, shape, blob in items:
         if dtype not in DTYPE_WIDTH:
             raise ValueError(f"unsupported dtype {dtype}")
-        start = cursor
-        end = start + len(blob)
-        planned.append((name, dtype, shape, blob, start, end))
-        cursor = _align8(end)
+        n = 1
+        for d in shape:
+            n *= int(d)
+        if n * DTYPE_WIDTH[dtype] != len(blob):
+            raise ValueError(
+                f"{name}: {dtype}{list(shape)} needs {n * DTYPE_WIDTH[dtype]} bytes, got {len(blob)}"
+            )
+    items.sort(key=lambda t: -DTYPE_WIDTH[t[1]])  # stable: keeps input order per width
+    planned: List[Tuple[str, str, Tuple[int, ...], bytes, int, int]] = []
+    cursor = 0
+    for name, dtype, shape, blob in items:
+        planned.append((name, dtype, shape, blob, cursor, cursor + len(blob)))
+        cursor += len(blob)
     header: dict = {}
     if metadata:
         header["__metadata__"] = {str(k): str(v) for k, v in metadata.items()}
     for name, dtype, shape, _blob, start, end in planned:
         header[name] = {"dtype": dtype, "shape": list(shape), "data_offsets": [start, end]}
     header_bytes = json.dumps(header, separators=(",", ":")).encode("utf-8")
-    # some readers want 8-aligned header
+    # 8-aligned data section start. Space padding is what the spec allows.
     pad = (-(len(header_bytes) + 8)) % 8
     if pad:
         header_bytes += b" " * pad
@@ -122,13 +131,5 @@ def write_safetensors(
     with open(path, "wb") as fp:
         fp.write(struct.pack("<Q", len(header_bytes)))
         fp.write(header_bytes)
-        pos = 0
-        for _name, _dtype, _shape, blob, start, end in planned:
-            if pos < start:
-                fp.write(b"\x00" * (start - pos))
-                pos = start
+        for _name, _dtype, _shape, blob, _start, _end in planned:
             fp.write(blob)
-            pos = end
-        tail = _align8(pos)
-        if tail > pos:
-            fp.write(b"\x00" * (tail - pos))

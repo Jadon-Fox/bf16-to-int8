@@ -30,6 +30,7 @@ from nf4 import (
 )
 from nested_nf import NF8_CELLS, cells_flat, decode_nested, encode_nested
 from safetensors_io import SafeTensorsFile, SafeTensorsSet, write_safetensors
+import fast
 COPY_SIDE_FILES = (
     "config.json",
     "generation_config.json",
@@ -95,6 +96,34 @@ def _dest_schema(dest: str) -> str:
     if dest == "nested-nf8":
         return "nested_nf8_pin_v1"
     return INT8_PIN_SCHEMA # orch INT8 loader ABI (legacy nf4_to_int8_pin_v1 still loads)
+def _quant_config(dest: str, blocksize: int, src_kinds: List[str]) -> dict:
+    """config.json quantization_config. Says what the pin really holds."""
+    if dest == "nf4":
+        return {
+            "quant_method": "bf16_to_nf4_pin",
+            "schema": _dest_schema(dest),
+            "load_in_4bit": True,
+            "bnb_4bit_quant_type": "nf4",
+            "nf4_blocksize": blocksize,
+            "converted_from": src_kinds,
+        }
+    if dest == "nested-nf8":
+        return {
+            "quant_method": "nested_nf8_pin",
+            "schema": _dest_schema(dest),
+            "nf4_blocksize": blocksize,
+            "plug": "4bit_subquantile_in_nf4_cell",
+            "converted_from": src_kinds,
+        }
+    return {
+        "quant_method": INT8_PIN_QUANT_METHOD,
+        "quant_method_legacy": "nf4_to_int8_pin",
+        "schema": INT8_PIN_SCHEMA,
+        "load_in_8bit": True,
+        "int8_scheme": "symmetric_per_block_zp0",
+        "int8_blocksize": blocksize,
+        "converted_from": src_kinds,
+    }
 def find_weight_files(src: Path) -> List[Path]:
     """Single file, or HF snapshot shards via model.safetensors.index.json."""
     if src.is_file() and src.suffix == ".safetensors":
@@ -255,10 +284,17 @@ def convert_nf4_module(
     src_q = str(state.get("quant_type") or "nf4")
     if qmap_name in st.tensors:
         codebook = unpack_f32(st.read_bytes(qmap_name))
-    f32 = dequant_nf4(qweight, absmax, n_elem, blocksize, nibble_order, codebook)
     i8_bs = int8_blocksize if int8_blocksize > 0 else blocksize
-    q8, scales = quantize_int8_symmetric(f32, blocksize=i8_bs)
-    recon = dequant_int8(q8, scales, blocksize=i8_bs)
+    if fast.available():
+        x = fast.dequant_nf4(qweight, absmax, n_elem, blocksize, nibble_order, codebook)
+        q_np, sc_np = fast.quantize_int8(x, blocksize=i8_bs)
+        rmse_v, maxe = fast.err_stats(x, fast.dequant_int8(q_np, sc_np, blocksize=i8_bs))
+        q8, scales = q_np.tobytes(), sc_np.tolist()
+    else:
+        f32 = dequant_nf4(qweight, absmax, n_elem, blocksize, nibble_order, codebook)
+        q8, scales = quantize_int8_symmetric(f32, blocksize=i8_bs)
+        recon = dequant_int8(q8, scales, blocksize=i8_bs)
+        rmse_v, maxe = rmse(f32, recon), max_abs_err(f32, recon)
     meta = {
         "src": stem,
         "src_quant": src_q,
@@ -269,10 +305,10 @@ def convert_nf4_module(
         "int8_blocksize": i8_bs,
         "int8_scheme": "symmetric_per_block_zp0",
         "n_scales": len(scales),
-        "rmse_vs_src_dequant": rmse(f32, recon),
-        "rmse_vs_nf4_dequant": rmse(f32, recon),
-        "max_abs_err_vs_src_dequant": max_abs_err(f32, recon),
-        "max_abs_err_vs_nf4_dequant": max_abs_err(f32, recon),
+        "rmse_vs_src_dequant": rmse_v,
+        "rmse_vs_nf4_dequant": rmse_v,
+        "max_abs_err_vs_src_dequant": maxe,
+        "max_abs_err_vs_nf4_dequant": maxe,
     }
     return bytes(q8), scales, meta
 def convert_dense_module(
@@ -299,22 +335,35 @@ def convert_dense_module(
             if not _GPU_QUANT_LOGGED:
                 print("INT8_QUANT device=cuda block=64", file=sys.stderr)
                 _GPU_QUANT_LOGGED = True
-    if not used_gpu:
+    rmse_v = 0.0
+    maxe = 0.0
+    width = {"BF16": 2, "F16": 2, "F32": 4}.get(info.dtype, 0)
+    if width and len(raw) < n_elem * width:
+        raise ValueError(f"{name}: dense short {len(raw) // width} < {n_elem}")
+    if fast.available():
+        # numpy: full-tensor error stats are cheap, so always report them.
+        x = fast.unpack_dense(info.dtype, raw, n_elem)
+        if used_gpu:
+            q_np = fast.np.frombuffer(q8, dtype=fast.np.int8)
+            sc_np = fast.np.asarray(scales, dtype=fast.np.float64)
+        else:
+            q_np, sc_np = fast.quantize_int8(x, blocksize=i8_bs)
+            q8, scales = q_np.tobytes(), sc_np.tolist()
+        rmse_v, maxe = fast.err_stats(x, fast.dequant_int8(q_np, sc_np, blocksize=i8_bs))
+    elif not used_gpu:
         f32 = unpack_dense(info.dtype, raw, info.shape)
         if len(f32) < n_elem:
             raise ValueError(f"{name}: dense short {len(f32)} < {n_elem}")
         f32 = f32[:n_elem]
         q8, scales = quantize_int8_symmetric(f32, blocksize=i8_bs)
         q8 = bytes(q8)
+        # stdlib RMSE on billions of elems is slow. Without numpy, skip big tensors.
+        if n_elem <= 65536:
+            recon = dequant_int8(q8, scales, blocksize=i8_bs)
+            rmse_v = rmse(f32, recon)
+            maxe = max_abs_err(f32, recon)
     stem = name[: -len(".weight")] if name.endswith(".weight") else name
     shape = tuple(int(x) for x in info.shape)
-    # Full RMSE on 3B elems is why CPU convert takes ~1h. Sample or skip.
-    rmse_v = 0.0
-    maxe = 0.0
-    if f32 is not None and n_elem <= 65536:
-        recon = dequant_int8(q8, scales, blocksize=i8_bs)
-        rmse_v = rmse(f32, recon)
-        maxe = max_abs_err(f32, recon)
     meta = {
         "src": stem,
         "src_quant": info.dtype.lower(),
@@ -325,7 +374,8 @@ def convert_dense_module(
         "int8_blocksize": i8_bs,
         "int8_scheme": "symmetric_per_block_zp0",
         "n_scales": len(scales),
-        "device": "cuda" if used_gpu else "cpu",
+        "device": "cuda" if used_gpu else ("cpu_numpy" if fast.available() else "cpu"),
+        "err_stats": "full" if (fast.available() or n_elem <= 65536) else "skipped",
         "rmse_vs_src_dequant": rmse_v,
         "rmse_vs_nf4_dequant": rmse_v,
         "max_abs_err_vs_src_dequant": maxe,
@@ -358,11 +408,17 @@ def convert_dense_to_nf4(
 ) -> Tuple[bytes, List[float], dict]:
     info = st.tensors[name]
     raw = st.read_bytes(name)
-    f32 = unpack_dense(info.dtype, raw, info.shape)
     n_elem = numel_of(info.shape)
-    f32 = f32[:n_elem]
-    packed, absmax = quantize_nf4(f32, blocksize=blocksize)
-    recon = dequant_nf4(packed, absmax, n_elem, blocksize)
+    if fast.available():
+        x = fast.unpack_dense(info.dtype, raw, n_elem)
+        packed, am_np = fast.quantize_nf4(x, blocksize=blocksize)
+        rmse_v, maxe = fast.err_stats(x, fast.dequant_nf4(packed, am_np, n_elem, blocksize))
+        absmax = am_np.tolist()
+    else:
+        f32 = unpack_dense(info.dtype, raw, info.shape)[:n_elem]
+        packed, absmax = quantize_nf4(f32, blocksize=blocksize)
+        recon = dequant_nf4(packed, absmax, n_elem, blocksize)
+        rmse_v, maxe = rmse(f32, recon), max_abs_err(f32, recon)
     stem = name[: -len(".weight")] if name.endswith(".weight") else name
     shape = tuple(int(x) for x in info.shape)
     meta = {
@@ -375,8 +431,8 @@ def convert_dense_to_nf4(
         "nf4_blocksize": blocksize,
         "int8_blocksize": 0,
         "n_scales": len(absmax),
-        "rmse_vs_src_dequant": rmse(f32, recon),
-        "max_abs_err_vs_src_dequant": max_abs_err(f32, recon),
+        "rmse_vs_src_dequant": rmse_v,
+        "max_abs_err_vs_src_dequant": maxe,
     }
     return bytes(packed), absmax, meta
 def _append_nf4(
@@ -411,13 +467,22 @@ def convert_dense_to_nested(
 ) -> Tuple[bytes, bytes, List[float], dict]:
     info = st.tensors[name]
     raw = st.read_bytes(name)
-    f32 = unpack_dense(info.dtype, raw, info.shape)
     n_elem = numel_of(info.shape)
-    f32 = f32[:n_elem]
-    nf4_idx, plug, absmax = encode_nested(f32, blocksize=blocksize)
-    hole = bytes(pack_indices(nf4_idx))
-    plug_b = bytes(pack_indices(plug))
-    recon = decode_nested(nf4_idx, plug, absmax, blocksize)
+    if fast.available():
+        x = fast.unpack_dense(info.dtype, raw, n_elem)
+        nf4_np, plug_np, am_np = fast.encode_nested(x, NF8_CELLS, blocksize=blocksize)
+        hole = fast.pack_nibbles(nf4_np)
+        plug_b = fast.pack_nibbles(plug_np)
+        recon_np = fast.decode_nested(nf4_np, plug_np, am_np, NF8_CELLS, blocksize)
+        rmse_v, maxe = fast.err_stats(x, recon_np)
+        absmax = am_np.tolist()
+    else:
+        f32 = unpack_dense(info.dtype, raw, info.shape)[:n_elem]
+        nf4_idx, plug, absmax = encode_nested(f32, blocksize=blocksize)
+        hole = bytes(pack_indices(nf4_idx))
+        plug_b = bytes(pack_indices(plug))
+        recon = decode_nested(nf4_idx, plug, absmax, blocksize)
+        rmse_v, maxe = rmse(f32, recon), max_abs_err(f32, recon)
     stem = name[: -len(".weight")] if name.endswith(".weight") else name
     shape = tuple(int(x) for x in info.shape)
     meta = {
@@ -428,8 +493,8 @@ def convert_dense_to_nested(
         "n_elem": n_elem,
         "nf4_blocksize": blocksize,
         "n_scales": len(absmax),
-        "rmse_vs_src_dequant": rmse(f32, recon),
-        "max_abs_err_vs_src_dequant": max_abs_err(f32, recon),
+        "rmse_vs_src_dequant": rmse_v,
+        "max_abs_err_vs_src_dequant": maxe,
     }
     return hole, plug_b, absmax, meta
 def _append_nested(
@@ -644,14 +709,7 @@ def convert_pin(
             cfg = json.loads(cfg_path.read_text())
         except json.JSONDecodeError:
             cfg = {}
-        cfg["quantization_config"] = {
-            "quant_method": INT8_PIN_QUANT_METHOD,
-            "quant_method_legacy": "nf4_to_int8_pin",
-            "load_in_8bit": True,
-            "int8_scheme": "symmetric_per_block_zp0",
-            "int8_blocksize": int8_blocksize,
-            "converted_from": sorted(src_kinds),
-        }
+        cfg["quantization_config"] = _quant_config(dest, int8_blocksize, sorted(src_kinds))
         (out_dir / "config.json").write_text(json.dumps(cfg, indent=2) + "\n")
     for name in COPY_SIDE_FILES:
         if name == "config.json":

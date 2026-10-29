@@ -8,6 +8,7 @@ does). So scales are compared to f32 precision and a code may differ by 1 only
 where w/scale sits on a .5 tie in one precision but not the other.
 """
 from __future__ import annotations
+import os
 import random
 import struct
 import pytest
@@ -108,3 +109,13 @@ def test_mojo_gpu_without_device_returns_none_or_quantizes():
     got = mojo_quant.quant_f32_i8(raw, device="gpu")
     if got is not None:
         assert got == mojo_quant.quant_f32_i8(raw, device="cpu")
+
+
+@pytest.mark.skipif(not os.environ.get("BF16_INT8_REQUIRE_GPU"),
+                    reason="set BF16_INT8_REQUIRE_GPU=1 on a GPU host")
+def test_mojo_gpu_runs_on_gpu_host():
+    # The test above cannot tell a silent CPU-only fallback from a working GPU path.
+    raw = pack_f32(_weights(4096 + 17, seed=7))
+    got = mojo_quant.quant_f32_i8(raw, device="gpu")
+    assert got is not None, "Mojo GPU path returned None on a host that should have a GPU"
+    assert got == mojo_quant.quant_f32_i8(raw, device="cpu")

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hangover filename. Golden checks for bf16_to_int8 / nf4_to_int8 alias. Not ."""
+"""Hangover filename. Golden checks for bf16_to_int8 / nf4_to_int8 alias."""
 from __future__ import annotations
 import json
 import subprocess

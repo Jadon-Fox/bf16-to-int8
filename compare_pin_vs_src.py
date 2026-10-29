@@ -5,6 +5,9 @@ Two residuals, kept separate:
    mismatches. Zero means the pin bytes are the converter output.
 2. Scheme fuzz: dequant (i8 * per-block scale) vs original BF16. Bound is
    half the block scale (round-to-nearest, zp=0, clip ±127).
+CUDA (cuda/libquant_i8.so) when built, else CPU (numpy, else stdlib).
+Byte match assumes the pin was written on the same device class: the CUDA
+kernel divides in f32, the CPU path in f64, so a rounding tie can land 1 apart.
 Carve-out. Not orch train.
 """
 from __future__ import annotations
@@ -14,11 +17,61 @@ import math
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 from nf4 import unpack_f32
 from pin_convert import find_weight_files
 from safetensors_io import SafeTensorsFile, SafeTensorsSet
+import fast
+from dtype_io import unpack_bf16
 from gpu_quant import compare_bf16_i8, gpu_quant_available, quant_bf16_i8
+from nf4 import quantize_int8_symmetric
+
+
+def cpu_quant_bf16_i8(raw: bytes, blocksize: int = 64) -> Tuple[bytes, List[float]]:
+    """Same bytes pin_convert writes on CPU."""
+    n = len(raw) // 2
+    if fast.available():
+        q, sc = fast.quantize_int8(fast.unpack_dense("BF16", raw, n), blocksize)
+        return q.tobytes(), sc.tolist()
+    q, sc = quantize_int8_symmetric(unpack_bf16(raw), blocksize)
+    return bytes(q), sc
+
+
+def cpu_compare_bf16_i8(
+    raw_bf16: bytes, q8: bytes, scales: List[float], blocksize: int = 64
+) -> Optional[Dict[str, Any]]:
+    """Host twin of gpu_quant.compare_bf16_i8 (same half-scale slack)."""
+    n = len(raw_bf16) // 2
+    nblk = (n + blocksize - 1) // blocksize
+    if n < 1 or len(raw_bf16) != n * 2 or len(q8) != n or len(scales) != nblk:
+        return None
+    if fast.available():
+        np = fast.np
+        w = fast.unpack_dense("BF16", raw_bf16, n)
+        sc = np.asarray(scales, dtype=np.float64)
+        e = np.abs(w - fast.dequant_int8(np.frombuffer(q8, dtype=np.int8), sc, blocksize))
+        slack = np.repeat(0.5 * sc * 1.0000002 + 1e-6, blocksize)[:n]
+        ss = float(np.dot(e, e))
+        mx = float(e.max())
+        ov = int((e > slack).sum())
+    else:
+        w = unpack_bf16(raw_bf16)
+        ss, mx, ov = 0.0, 0.0, 0
+        for i in range(n):
+            s = float(scales[i // blocksize])
+            b = q8[i]
+            d = abs(w[i] - (b if b < 128 else b - 256) * s)
+            ss += d * d
+            mx = max(mx, d)
+            if d > 0.5 * s * 1.0000002 + 1e-6:
+                ov += 1
+    return {
+        "n": n,
+        "rmse": math.sqrt(ss / float(n)),
+        "max_abs": mx,
+        "sum_sq": ss,
+        "n_over_half_scale": ov,
+    }
 def _open_set(path: Path) -> SafeTensorsSet:
     files = [SafeTensorsFile(str(p)) for p in find_weight_files(path)]
     return SafeTensorsSet(files)
@@ -31,12 +84,14 @@ def _scale_rel_max(a: List[float], b: List[float]) -> float:
         if r > m:
             m = r
     return m
-def main() -> int:
+def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--pin", required=True, help="INT8 pin directory")
     ap.add_argument("--src", default="", help="override BF16 snapshot dir")
     ap.add_argument("--out", default="", help="JSON report path")
-    args = ap.parse_args()
+    ap.add_argument("--device", choices=("auto", "cuda", "cpu"), default="auto",
+                    help="auto = CUDA if libquant_i8.so loads, else CPU")
+    args = ap.parse_args(argv)
     pin_dir = Path(args.pin)
     pin_json_path = pin_dir / "pin.json"
     if not pin_json_path.is_file():
@@ -47,9 +102,16 @@ def main() -> int:
     if not src_dir.exists():
         print(f"HARD_BLOCK: missing src {src_dir}", file=sys.stderr)
         return 2
-    if not gpu_quant_available():
-        print("HARD_BLOCK: libquant_i8.so / CUDA compare unavailable", file=sys.stderr)
-        return 2
+    device = args.device
+    if device == "auto":
+        device = "cuda" if gpu_quant_available() else "cpu"
+    if device == "cuda":
+        if not gpu_quant_available():
+            print("HARD_BLOCK: libquant_i8.so / CUDA compare unavailable", file=sys.stderr)
+            return 2
+        requant, compare = quant_bf16_i8, compare_bf16_i8
+    else:
+        requant, compare = cpu_quant_bf16_i8, cpu_compare_bf16_i8
     t0 = time.time()
     pin_st = _open_set(pin_dir)
     src_st = _open_set(src_dir)
@@ -95,9 +157,9 @@ def main() -> int:
                     file=sys.stderr,
                 )
                 return 2
-            fresh = quant_bf16_i8(src_raw, blocksize=64)
+            fresh = requant(src_raw, blocksize=64)
             if fresh is None:
-                print(f"HARD_BLOCK: GPU requant failed {name}", file=sys.stderr)
+                print(f"HARD_BLOCK: {device} requant failed {name}", file=sys.stderr)
                 return 2
             q_fresh, sc_fresh = fresh
             i8_mis = 0
@@ -105,9 +167,9 @@ def main() -> int:
                 i8_mis = sum(1 for a, b in zip(q_fresh, q8) if a != b)
             sc_rel = _scale_rel_max(scales, sc_fresh)
             sc_mis = 0 if sc_rel <= 1e-6 else 1
-            err = compare_bf16_i8(src_raw, q8, scales, blocksize=64)
+            err = compare(src_raw, q8, scales, blocksize=64)
             if err is None:
-                print(f"HARD_BLOCK: GPU compare failed {name}", file=sys.stderr)
+                print(f"HARD_BLOCK: {device} compare failed {name}", file=sys.stderr)
                 return 2
             n_linears += 1
             total_ss += err["sum_sq"]
@@ -185,6 +247,7 @@ def main() -> int:
         "passthrough_mismatch_tensors": n_pass_mis,
         "scheme": "symmetric_per_block_zp0",
         "blocksize": 64,
+        "device": device,
         "rmse_vs_bf16": rmse,
         "max_abs_vs_bf16": global_max,
         "n_over_half_scale": global_over,

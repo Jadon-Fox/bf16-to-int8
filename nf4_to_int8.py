@@ -3,7 +3,7 @@
   python3 bf16_to_int8.py pin --src /path/to/phi-4-mini-bf16 --out /path/to/int8-pin
   python3 nf4_to_int8.py pin --src /path/to/phi-4-mini-bf16 --out /path/to/int8-pin
 NF4/bnb-4bit sources need --allow-requant (lossy). Product hop is dense BF16.
-Offline pin. Not a dest-pack flip. Not .
+Offline pin. Not a dest-pack flip.
 """
 from __future__ import annotations
 import argparse
@@ -126,6 +126,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     fix_p = sub.add_parser("fixture", help="write a tiny 8x64 INT8 pin for orch loader CI")
     fix_p.add_argument("--out", required=True, help="directory; writes _src/ and int8_pin/")
+    ver_p = sub.add_parser("verify", help="fail-closed ABI check of a pin dir (CPU, no source needed)")
+    ver_p.add_argument("--pin", required=True, help="pin directory (pin.json + model.safetensors)")
+    ver_p.add_argument("--expand", action="store_true", help="also dequant every linear on the host")
     ten_p = sub.add_parser("tensor", help="convert one packed NF4 buffer")
     ten_p.add_argument("--qweight", type=Path)
     ten_p.add_argument("--absmax", type=Path)
@@ -155,6 +158,11 @@ def main(argv: list[str] | None = None) -> int:
         got = write_tiny_fixture(Path(args.out))
         print(json.dumps(got["pin"], indent=2))
         return 0
+    if args.cmd == "verify":
+        from pin_load import verify_pin
+        rep = verify_pin(Path(args.pin), expand=args.expand)
+        print(json.dumps(rep, indent=2))
+        return 0 if rep["ok"] else 3
     if args.cmd == "tensor":
         return run_tensor(args)
     return run_tensor(args)

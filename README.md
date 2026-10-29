@@ -13,6 +13,13 @@ python3 nf4_to_int8.py pin --src /path/to/phi-4-mini-bf16 --out /path/to/nested-
 python3 nf4_to_int8.py pin --src model.safetensors --out /tmp/pin --dry-run
 # HF snapshots with model.safetensors.index.json (2+ shards) are read as one catalog.
 ```
+Check a pin before handing it to orch (CPU, no source needed, exit 3 on any ABI error):
+```bash
+python3 bf16_to_int8.py verify --pin /path/to/int8-pin           # schema, shapes, scales, state JSON
+python3 bf16_to_int8.py verify --pin /path/to/int8-pin --expand  # also dequant every linear on the host
+python3 compare_pin_vs_src.py --pin /path/to/int8-pin             # vs original BF16. CUDA if built, else CPU
+```
+Stdlib only by default. If `numpy` is installed the quant loops run vectorized and write **the same bytes** (tested). `BF16_TO_INT8_NO_NUMPY=1` forces the stdlib path. Output `model.safetensors` follows the spec (contiguous offsets), so HF `safetensors` opens it.
 Already-quantized NF4 is **refused** unless `--allow-requant` (lossy second hop; cannot restore BF16).
 | flag | default | |
 |------|---------|--|
