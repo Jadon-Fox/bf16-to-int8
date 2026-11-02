@@ -36,3 +36,18 @@ GPTQ, AWQ, GGUF: refuse. Get the HuggingFace **BF16/F16** tree.
 | **NF4** | need to **fit** on 12 GB. Better 4-bit than INT4 for QLoRA-style dequant. Schema `bf16_to_nf4_pin_v1` |
 Ampere still GEMMs in f16/f32. Storage only. Meaning Version: 0.3.4.
 INT4 dest is not offered (worse unfold than NF4 at the same size).
+
+## Mojo INT8 block quant (optional twin)
+
+Offline symmetric INT8 block quant also ships as a **Mojo twin** of `cuda/quant_i8.cu` (`mojo/quant_i8.mojo` → `mojo/quant_i8_mojo.so`). Same Python contract as `gpu_quant.py` via `mojo_quant.py`: `(q8 bytes, per-block scales)` or `None` when not built. Block size **64** only; `device="cpu"` or `"gpu"`.
+
+```bash
+pip install "mojo==1.1.*" "max==26.6.*"   # CI pins; see .github/workflows/mojo.yml
+bash mojo/build.sh                        # cross-compiles for sm_86; no GPU required to build
+python -m pytest -q -rs test_mojo_quant.py
+# Optional CUDA vs Mojo twin on the same BF16 buffer:
+bash cuda/build_quant_i8.sh && bash mojo/build.sh
+python3 compare_mojo_vs_cuda.py --n 1048576
+```
+
+`bf16_to_int8.py pin` still uses the CUDA path when `cuda/libquant_i8.so` is present; the Mojo module is for parity checks and CI golden tests, not a separate pin schema. Advisory workflow: `.github/workflows/mojo.yml`.
