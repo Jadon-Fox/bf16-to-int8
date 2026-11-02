@@ -36,3 +36,18 @@ GPTQ, AWQ, GGUF: refuse. Get the HuggingFace **BF16/F16** tree.
 | **NF4** | need to **fit** on 12 GB. Better 4-bit than INT4 for QLoRA-style dequant. Schema `bf16_to_nf4_pin_v1` |
 Ampere still GEMMs in f16/f32. Storage only. Meaning Version: 0.3.4.
 INT4 dest is not offered (worse unfold than NF4 at the same size).
+## Block INT8 quant backends (pin convert)
+Dense 16-bit linears use **symmetric block INT8** with `blocksize=64` (`nf4.quantize_int8_symmetric` in Python, or GPU when built). The pin converter (`pin_convert.py`) calls **`gpu_quant.quant_bf16_i8`** only; it does not load the Mojo module.
+| Path | Artifact | Role |
+|------|----------|------|
+| CUDA | `bash cuda/build_quant_i8.sh` → `cuda/libquant_i8.so` | **Production** GPU quant for pin convert (sm_86) |
+| Mojo twin | `bash mojo/build.sh` → `mojo/quant_i8_mojo.so` | Same ABI as CUDA; catches Mojo API drift without a GPU at build time (`MOJO_ACCEL`, default `sm_86`) |
+| Python | `nf4.py` | Fallback when no `.so` is present |
+Build the Mojo twin with `pip install mojo max` (CI pins Mojo 1.1 / MAX 26.6). `mojo_quant.py` exposes `quant_bf16_i8` / `quant_f32_i8` with `device=cpu|gpu`; missing build returns `None` like `gpu_quant`.
+**Twin check (not pin convert):**
+```bash
+bash cuda/build_quant_i8.sh && bash mojo/build.sh
+python -m pytest -q test_mojo_quant.py          # CPU golden vs nf4 golden; skipped if .so missing
+python3 compare_mojo_vs_cuda.py --n $((1<<20))  # JSON report; exit 1 on bound or ref mismatch
+```
+Advisory CI: `.github/workflows/mojo.yml` (cross-compile + CPU golden; `continue-on-error: true`).
