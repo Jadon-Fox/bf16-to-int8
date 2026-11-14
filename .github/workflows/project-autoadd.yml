@@ -25,16 +25,9 @@ jobs:
             });
         continue-on-error: true
 
-      - name: Add to Project 6 (GLINT & bf16-to-int8)
+      - name: Add to Project 6 — GLINT (Jadon-Fox)
         uses: actions/add-to-project@v1.0.2
         with:
           project-url: https://github.com/users/Jadon-Fox/projects/6
-          github-token: ${{ secrets.PROJECT_TOKEN }}
-        continue-on-error: true
-
-      - name: Add to Org Project (Fractal-Deployment)
-        uses: actions/add-to-project@v1.0.2
-        with:
-          project-url: https://github.com/orgs/Fractal-Deployment/projects/4
           github-token: ${{ secrets.PROJECT_TOKEN }}
         continue-on-error: true
